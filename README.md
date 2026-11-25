@@ -278,3 +278,11 @@ MIT, see [LICENSE](LICENSE). Bundled fonts, icons and artwork are covered in [NO
 
 ATLauncher is not affiliated with LG, Apple, TMDB or any app or brand shown in its UI. App names, logos and splash art
 belong to their owners. Apple TV is a trademark of Apple Inc.; webOS is a trademark of LG Electronics.
+
+## CouchTV Scenes
+
+Open **Settings → Appearance → CouchTV Scenes** to enable the optional look. Pick **Follow the Sun**, timed rotation, or a fixed scene. You can change the weather display, temperature units, clock format, and dock size here. Compact keeps the same six tiles at 80% of the original dock size.
+
+Follow the Sun uses the sun's position for Huntsville, AL 35803. Open-Meteo provides current conditions directly. When weather is unavailable, the scene still follows the sun. The stock appearance remains available by turning CouchTV Scenes off.
+
+Run `node tests/couch-scenes.cjs` from the repository root to verify scene selection and weather formatting. Scene artwork and the solar calculation are credited in [the CouchTV notices](app/couch-scenes/NOTICE.md).

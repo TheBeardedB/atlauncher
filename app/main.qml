@@ -117,6 +117,7 @@ WebOSWindow {
     Home {
         id: home
         luna: luna
+        foreground: win.active
         appId: win.appId
         launchParams: win.parsed(win.launchParams)
         version: '1.0.1'

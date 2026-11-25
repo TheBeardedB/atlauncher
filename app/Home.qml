@@ -2,6 +2,7 @@ import QtQuick 2.12
 import "."
 import QtQuick.Window 2.12
 import "Catalog.js" as Cat
+import "CouchScenes.js" as Couch
 import "Store.js" as Store
 import "Tmdb.js" as Tmdb
 
@@ -175,7 +176,7 @@ Item {
 
     function tmdbStyle(i) {
         var app = apps[i];
-        return !prefs.tmdbOff && app && app.style && tmdbItems[app.id] && tmdbItems[app.id].length ? app.style : 'none';
+        return !couchAppearance && !prefs.tmdbOff && app && app.style && tmdbItems[app.id] && tmdbItems[app.id].length ? app.style : 'none';
     }
     function styleOf(i) { return apps[i] && apps[i].id === revealedId ? tmdbStyle(i) : 'none'; }
     function itemsOf(i) { return (apps[i] && tmdbItems[apps[i].id]) || []; }
@@ -188,7 +189,7 @@ Item {
         if (app && app.tmdb) { revealTimer.index = shelfApp; revealTimer.restart(); }
     }
     function reveal(index) {
-        if (index !== shelfApp || !apps[index] || prefs.tmdbOff || (appView && mode === 'shelf')) return;
+        if (couchAppearance || index !== shelfApp || !apps[index] || prefs.tmdbOff || (appView && mode === 'shelf')) return;
         revealedId = apps[index].id;
         if (!tmdbAsked && tmdbKey) { tmdbAsked = true; if (!cacheFresh) refreshTmdb(); }
         render(true);
@@ -198,6 +199,67 @@ Item {
     function staticItem(app) {
         var shelf = app.shelf || ['#3a3c46', '#0b0c0f'];
         return typeof shelf === 'string' ? { key: shelf, src: shelf } : { key: 'g:' + shelf.join(','), gradient: shelf };
+    }
+
+    readonly property bool couchAppearance: prefs.couchAppearance === true
+    readonly property real dockBarWidth: 1842 * dockScale
+    readonly property real dockBarX: (width - dockBarWidth) / 2
+    readonly property real dockBarY: barY + 228 * (1 - dockScale) + dockShift
+    readonly property real dockScale: couchAppearance && prefs.couchCompactDock !== false ? 0.8 : 1
+    readonly property var couchModes: [
+        { id: 'sun', name: 'Follow the Sun' }, { id: 'rotation', name: 'Rotate Scenes' },
+        { id: 'night', name: 'Night' }, { id: 'dawn', name: 'Dawn' },
+        { id: 'water', name: 'Waterline' }, { id: 'fog', name: 'Fog' },
+        { id: 'golden', name: 'Golden Hour' }
+    ]
+    property bool foreground: true
+    property date couchTime: new Date()
+    property var couchWeather: null
+    property var weatherRequest: null
+    readonly property bool showCouchWeather: couchAppearance && prefs.couchWeather !== false
+    readonly property string couchWeatherLabel: showCouchWeather
+        ? Couch.weatherLabel(couchWeather, couchTime.getTime(), prefs.couchUnits === 'C' ? 'C' : 'F') : ''
+
+    function updateCouchScene() {
+        couchTime = new Date();
+        if (couchAppearance && mode !== 'shelf') {
+            var code = showCouchWeather && Couch.isFresh(couchWeather, couchTime.getTime()) ? couchWeather.code : null;
+            var scene = Couch.sceneFor(prefs.couchMode, Couch.place, couchTime, code, prefs.couchSeconds || 20);
+            backdrop.show({ key: 'couch:' + scene, src: Qt.resolvedUrl('couch-scenes/scene-' + scene + '.jpg'), couch: scene });
+        }
+    }
+
+    function refreshCouchWeather() {
+        if (weatherRequest) weatherRequest.abort();
+        var request = new XMLHttpRequest();
+        weatherRequest = request;
+        request.onreadystatechange = function () {
+            if (request.readyState !== XMLHttpRequest.DONE || weatherRequest !== request) return;
+            weatherRequest = null;
+            if (request.status !== 200) return;
+            try {
+                var report = Couch.readWeather(JSON.parse(request.responseText), Date.now());
+                if (report) { couchWeather = report; updateCouchScene(); }
+            } catch (e) {}
+        };
+        request.open('GET', 'https://api.open-meteo.com/v1/forecast?latitude=' + Couch.place.latitude +
+                     '&longitude=' + Couch.place.longitude + '&current=temperature_2m,weather_code');
+        try { request.send(); } catch (e) { weatherRequest = null; }
+    }
+
+    Timer {
+        interval: 1000
+        repeat: true
+        running: home.couchAppearance && home.foreground && !settings.open
+        triggeredOnStart: true
+        onTriggered: home.updateCouchScene()
+    }
+    Timer {
+        interval: 900000
+        repeat: true
+        running: home.showCouchWeather && home.foreground
+        triggeredOnStart: true
+        onTriggered: home.refreshCouchWeather()
     }
 
     function sceneFor(index) {
@@ -226,7 +288,8 @@ Item {
         style = st;
         if (fresh) rev++;
         scheduleCarousel();
-        if (apps[shelfApp]) backdrop.show(sceneFor(shelfApp));
+        if (couchAppearance && mode !== 'shelf') updateCouchScene();
+        else if (apps[shelfApp]) backdrop.show(sceneFor(shelfApp));
     }
 
     function scheduleCarousel() {
@@ -432,7 +495,7 @@ Item {
     }
 
     // ---- Settings ----
-    function setPref(name, value) { var p = prefs; p[name] = value; prefs = p; Store.set('prefs', p); }
+    function setPref(name, value) { var p = Object.assign({}, prefs); p[name] = value; prefs = p; Store.set('prefs', p); }
     function onOff(on) { return on ? 'On' : 'Off'; }
 
     function pageFor(id) {
@@ -474,7 +537,40 @@ Item {
                             : 'Popular shows need your own free TMDB API key in ' + Cat.DATA_DIR + '/tmdb.key (see the README). Until then each app shows its own splash.',
               act: function () { setPref('tmdbOff', !prefs.tmdbOff); if (prefs.tmdbOff) render(true); else armReveal(); refreshSettings(); } }
         ] };
+        if (id === 'couchScenes') {
+            var background = couchModes.filter(function (option) { return option.id === prefs.couchMode; })[0];
+            return { title: 'CouchTV Scenes', rows: [
+                { label: 'CouchTV Scenes', value: onOff(couchAppearance), glyph: 'look',
+                  act: function () { setPref('couchAppearance', !couchAppearance); render(true); refreshSettings(); } },
+                { label: 'Background', page: 'couchBackground', glyph: 'look',
+                  value: background ? background.name : 'Follow the Sun' },
+                { label: 'Weather', value: onOff(prefs.couchWeather !== false), glyph: 'info',
+                  note: 'Current weather from Open-Meteo for ' + Couch.place.label + '. Weather also chooses the daytime scene.',
+                  act: function () { setPref('couchWeather', prefs.couchWeather === false); updateCouchScene(); refreshSettings(); } },
+                { label: 'Temperature Units', value: prefs.couchUnits === 'C' ? '°C' : '°F', glyph: 'info',
+                  act: function () { setPref('couchUnits', prefs.couchUnits === 'C' ? 'F' : 'C'); refreshSettings(); } },
+                { label: 'Clock Format', value: prefs.couch24Hour ? '24-hour' : '12-hour', glyph: 'info',
+                  act: function () { setPref('couch24Hour', !prefs.couch24Hour); refreshSettings(); } },
+                { label: 'Dock Size', value: prefs.couchCompactDock === false ? 'Original' : 'Compact', glyph: 'apps',
+                  act: function () { setPref('couchCompactDock', prefs.couchCompactDock === false); refreshSettings(); } }
+            ] };
+        }
+        if (id === 'couchBackground') {
+            var scenes = couchModes.map(function (option) {
+                return { label: option.name, value: (prefs.couchMode || 'sun') === option.id ? 'Selected' : '', glyph: 'look',
+                    act: function () { setPref('couchMode', option.id); updateCouchScene(); refreshSettings(); } };
+            });
+            scenes.push({ label: 'Rotation Interval', value: (prefs.couchSeconds || 20) + ' seconds', glyph: 'look',
+                act: function () {
+                    var intervals = [10, 20, 30, 60];
+                    setPref('couchSeconds', intervals[(intervals.indexOf(prefs.couchSeconds || 20) + 1) % intervals.length]);
+                    updateCouchScene(); refreshSettings();
+                } });
+            return { title: 'Background', rows: scenes };
+        }
         if (id === 'look') return { title: 'Appearance', rows: [
+            { label: 'CouchTV Scenes', value: onOff(couchAppearance), page: 'couchScenes', glyph: 'look',
+              note: 'Scenic backgrounds, local weather, and a large clock.' },
             { label: 'Liquid Glass Dock', value: onOff(liquidGlass), glyph: 'look',
               note: 'The Dock is a slab of glass: its rounded edge bends the picture behind it and catches the light. Off keeps a plain clear edge.',
               act: function () { liquidGlass = !liquidGlass; setPref('liquidGlass', liquidGlass); refreshSettings(); } },
@@ -840,6 +936,15 @@ Item {
             }
         }
 
+        CouchClock {
+            anchors.fill: parent
+            visible: home.couchAppearance && home.mode === 'home' && !home.editing && !settings.open
+            scene: home.shownScene && home.shownScene.couch || ''
+            time: home.couchTime
+            use24Hour: home.prefs.couch24Hour === true
+            weather: home.couchWeatherLabel
+        }
+
         // ---- Clock + avatar pill ----
         Item {
             id: status
@@ -847,7 +952,7 @@ Item {
             y: 50
             width: statusRow.width + 33
             height: 60
-            opacity: home.grid || home.carouselFull ? 0 : 1
+            opacity: home.grid || home.carouselFull || home.couchAppearance ? 0 : 1
             visible: opacity > 0
             Behavior on opacity { NumberAnimation { duration: 300 } }
             Glass {
@@ -1068,22 +1173,22 @@ Item {
 
         // ---- Dock glass (moves with the Dock row) ----
         Shadow {
-            x: home.barX - blur
-            y: home.barY + home.dockShift - blur + 16
-            shapeW: 1842; shapeH: 228; radius: 66; blur: 36; dy: 0; strength: 0.26
+            x: home.dockBarX - blur
+            y: home.dockBarY - blur + 16
+            shapeW: home.dockBarWidth; shapeH: 228 * home.dockScale; radius: 66 * home.dockScale; blur: 36; dy: 0; strength: 0.26
             visible: home.liquidGlass
         }
         Glass {
             id: dockGlass
-            x: home.barX
-            y: home.barY + home.dockShift
-            width: 1842
-            height: 228
+            x: home.dockBarX
+            y: home.dockBarY
+            width: home.dockBarWidth
+            height: 228 * home.dockScale
             sharpA: backdrop.back.sharp; frostA: backdrop.back.frost
             sharpB: backdrop.front.sharp; frostB: backdrop.front.frost
             fade: backdrop.mix
-            radius: 66
-            edge: home.liquidGlass ? 36 : 24
+            radius: 66 * home.dockScale
+            edge: (home.liquidGlass ? 36 : 24) * home.dockScale
             liquid: home.liquidGlass ? 1 : 0
             // Frosted wherever the backdrop is (it follows the same 400 ms fade).
             frosted: backdrop.frostLevel
@@ -1101,8 +1206,14 @@ Item {
                 readonly property int r: Math.floor(index / home.cols)
                 app: (home.rev, home.appById[aid] || ({}))
                 visible: !app.gap
-                x: home.marginX + (index % home.cols) * (home.tileW + home.gap)
-                y: r === 0 ? home.dockTop + home.dockShift : home.gridTop + (r - 1) * home.rowPitch + home.gridShift
+                x: r === 0 ? home.dockBarX + (home.marginX - home.barX + (index % home.cols) * (home.tileW + home.gap)) * home.dockScale
+                           : home.marginX + (index % home.cols) * (home.tileW + home.gap)
+                y: r === 0 ? home.dockBarY + (home.dockTop - home.barY) * home.dockScale
+                           : home.gridTop + (r - 1) * home.rowPitch + home.gridShift
+                transform: Scale {
+                    xScale: tileItem.r === 0 ? home.dockScale : 1
+                    yScale: xScale
+                }
                 inGrid: r > 0
                 focused: index === home.focusIndex
                 editing: home.editing
